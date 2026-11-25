@@ -179,7 +179,30 @@ export class EmailService {
       ).toISOString(),
     };
   }
-
+    /**
+   * Creates an additional sender for a user.
+   */
+  public static async createSender(
+    userId: string,
+    data: {
+      email: string;
+      displayName: string;
+      maxEmailsPerHour?: number;
+      minDelayMsBetweenSend?: number;
+    }
+  ) {
+    return prisma.sender.create({
+      data: {
+        userId,
+        email: data.email.trim().toLowerCase(),
+        displayName: data.displayName.trim(),
+        ...(data.maxEmailsPerHour ? { maxEmailsPerHour: data.maxEmailsPerHour } : {}),
+        ...(data.minDelayMsBetweenSend !== undefined
+          ? { minDelayMsBetweenSend: data.minDelayMsBetweenSend }
+          : {}),
+      },
+    });
+  }
   /**
    * Retrieves paginated scheduled emails.
    */

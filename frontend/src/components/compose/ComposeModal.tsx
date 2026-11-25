@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useCsvParser } from '../../hooks/useCsvParser';
 import { Button } from '../ui/Button';
 import { api } from '../../lib/api';
@@ -12,8 +12,9 @@ import {
   Zap,
   Users,
   CheckCircle2,
-  AlertCircle,
   Sparkles,
+  Mail,
+  Plus,
 } from 'lucide-react';
 
 interface ComposeModalProps {
@@ -22,21 +23,56 @@ interface ComposeModalProps {
   onSuccess: () => void;
 }
 
+interface SenderOption {
+  id: string;
+  email: string;
+  displayName: string;
+}
+
 export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const { parseFile, clearCsv, result: csvResult, parsing } = useCsvParser();
+  const { parseFile, clearCsv, result: csvResult } = useCsvParser();
 
   const [rawRecipientsText, setRawRecipientsText] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [scheduledAtDate, setScheduledAtDate] = useState(() => {
     const now = new Date();
-    // Default start time: 2 minutes in the future
+    // Default start time: 2 minutes in the future, in the user's local time
     now.setMinutes(now.getMinutes() + 2);
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
     return now.toISOString().slice(0, 16); // format YYYY-MM-THH:mm
   });
   const [minDelaySeconds, setMinDelaySeconds] = useState(2); // Default 2s delay
   const [hourlyLimit, setHourlyLimit] = useState(100); // Default 100/hr
   const [submitting, setSubmitting] = useState(false);
+
+  // Sender selection
+  const [senders, setSenders] = useState<SenderOption[]>([]);
+  const [selectedSenderId, setSelectedSenderId] = useState('');
+  const [showAddSender, setShowAddSender] = useState(false);
+  const [newSenderEmail, setNewSenderEmail] = useState('');
+  const [newSenderName, setNewSenderName] = useState('');
+  const [addingSender, setAddingSender] = useState(false);
+
+  // Load the user's senders whenever the modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    api
+      .get('/emails/senders')
+      .then((res) => {
+        if (cancelled) return;
+        const list: SenderOption[] = res.data.senders || [];
+        setSenders(list);
+        setSelectedSenderId((prev) => prev || list[0]?.id || '');
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Could not load senders');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -75,6 +111,37 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, onS
     }
   };
 
+  const handleAddSender = async () => {
+    const email = newSenderEmail.trim().toLowerCase();
+    const displayName = newSenderName.trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error('Enter a valid sender email address.');
+      return;
+    }
+    if (!displayName) {
+      toast.error('Enter a display name for the sender.');
+      return;
+    }
+
+    setAddingSender(true);
+    try {
+      const res = await api.post('/emails/senders', { email, displayName });
+      const created: SenderOption = res.data.sender;
+      setSenders((prev) => [...prev, created]);
+      setSelectedSenderId(created.id);
+      setNewSenderEmail('');
+      setNewSenderName('');
+      setShowAddSender(false);
+      toast.success(`Sender ${created.email} added.`);
+    } catch (error: any) {
+      const msg = error.response?.data?.error || 'Failed to add sender';
+      toast.error(msg);
+    } finally {
+      setAddingSender(false);
+    }
+  };
+
   const handleScheduleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -96,13 +163,14 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, onS
     setSubmitting(true);
 
     try {
-      const payload: ScheduleEmailPayload = {
+      const payload: ScheduleEmailPayload & { senderId?: string } = {
         recipients: finalRecipients,
         subject: subject.trim(),
         body: body.trim(),
         scheduledAt: new Date(scheduledAtDate).toISOString(),
         maxEmailsPerHour: Number(hourlyLimit),
         minDelayMsBetweenSend: Number(minDelaySeconds) * 1000,
+        senderId: selectedSenderId || undefined,
       };
 
       const res = await api.post('/emails/schedule', payload);
@@ -239,6 +307,59 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, onS
               <Clock className="w-4 h-4 text-[#F4D35E]" />
               4. Execution Schedule & Rate Limits
             </h4>
+
+            {/* Sender selection */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                  <Mail className="w-3.5 h-3.5 text-[#F4D35E]" />
+                  Send From (each sender has its own hourly limit)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowAddSender((v) => !v)}
+                  className="flex items-center gap-1 text-[11px] text-[#F4D35E] hover:text-white"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {showAddSender ? 'Cancel' : 'Add sender'}
+                </button>
+              </div>
+
+              <select
+                value={selectedSenderId}
+                onChange={(e) => setSelectedSenderId(e.target.value)}
+                className="w-full px-2.5 py-1.5 bg-[#151D2A] border border-[#232E42] rounded-lg text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+              >
+                {senders.length === 0 && <option value="">Default sender</option>}
+                {senders.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.displayName} ({s.email})
+                  </option>
+                ))}
+              </select>
+
+              {showAddSender && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 bg-slate-900/60 border border-slate-800 rounded-lg">
+                  <input
+                    type="email"
+                    value={newSenderEmail}
+                    onChange={(e) => setNewSenderEmail(e.target.value)}
+                    placeholder="sender@example.com"
+                    className="px-2.5 py-1.5 bg-[#151D2A] border border-[#232E42] rounded-lg text-slate-200 text-xs placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                  />
+                  <input
+                    type="text"
+                    value={newSenderName}
+                    onChange={(e) => setNewSenderName(e.target.value)}
+                    placeholder="Display name"
+                    className="px-2.5 py-1.5 bg-[#151D2A] border border-[#232E42] rounded-lg text-slate-200 text-xs placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                  />
+                  <Button variant="primary" type="button" loading={addingSender} onClick={handleAddSender}>
+                    Add
+                  </Button>
+                </div>
+              )}
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>

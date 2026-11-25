@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AuthenticatedRequest } from '../middleware/authMiddleware';
 import { EmailService } from '../services/emailService';
 import { ElasticsearchService } from '../services/elasticsearchService';
+import { prisma } from '../config/db';
 
 const scheduleSchema = z.object({
   recipients: z.array(z.string()).min(1, 'At least one recipient email is required'),
@@ -10,6 +11,13 @@ const scheduleSchema = z.object({
   body: z.string().min(1, 'Body cannot be empty'),
   scheduledAt: z.string(),
   senderId: z.string().optional(),
+  maxEmailsPerHour: z.number().int().positive().optional(),
+  minDelayMsBetweenSend: z.number().int().nonnegative().optional(),
+});
+
+const senderSchema = z.object({
+  email: z.string().email('A valid sender email is required'),
+  displayName: z.string().min(1, 'Display name is required'),
   maxEmailsPerHour: z.number().int().positive().optional(),
   minDelayMsBetweenSend: z.number().int().nonnegative().optional(),
 });
@@ -95,6 +103,57 @@ export class EmailController {
 
       const result = await ElasticsearchService.searchEmails(userId, q, status, page, limit);
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/emails/senders
+   */
+  public static async listSenders(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const senders = await prisma.sender.findMany({
+        where: { userId: req.user!.userId, isActive: true },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          email: true,
+          displayName: true,
+          maxEmailsPerHour: true,
+          minDelayMsBetweenSend: true,
+        },
+      });
+      res.json({ senders });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/emails/senders
+   */
+  public static async createSender(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const data = senderSchema.parse(req.body);
+      const sender = await EmailService.createSender(req.user!.userId, data);
+      res.status(201).json({
+        sender: {
+          id: sender.id,
+          email: sender.email,
+          displayName: sender.displayName,
+          maxEmailsPerHour: sender.maxEmailsPerHour,
+          minDelayMsBetweenSend: sender.minDelayMsBetweenSend,
+        },
+      });
     } catch (error) {
       next(error);
     }
