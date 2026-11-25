@@ -214,6 +214,16 @@ The worker runs `WORKER_CONCURRENCY` jobs in parallel (default 10). Spacing and 
 - jobs keep their original order (each later job lands a few milliseconds after the previous one in its window)
 - one Slack alert is posted for the limit hit
 
+### Multiple senders
+
+A user can have several senders. Each sender has its own hourly limit and its own minimum delay between sends, and the rate limiter counts each sender separately, so one sender hitting its limit does not slow the others.
+
+- The Compose form has a **Send From** dropdown and an **Add sender** option.
+- `GET /api/emails/senders` lists the user's active senders and `POST /api/emails/senders` creates one.
+- `POST /api/emails/schedule` accepts an optional `senderId`. If it is missing, or does not belong to the user, the user's first active sender is used.
+- The hourly limit and delay entered in the Compose form are saved on the chosen sender.
+- The Slack alert names the sender that hit its limit.
+
 ### Behaviour under load (1000+ emails at the same time)
 
 All 1000+ emails are stored and queued. The sender's slots are handed out one after another, so sends are spread at the minimum delay instead of firing together, and at most `WORKER_CONCURRENCY` jobs run at once. Once the hourly limit is reached, the remaining jobs are deferred to the next windows in order. Nothing is lost, because every job lives in Redis and PostgreSQL, and a restart in the middle changes nothing.
@@ -234,6 +244,27 @@ Sent and scheduled emails are indexed in Elasticsearch (recipient, subject, body
 Slack tokens are stored encrypted per user. If a user has not connected Slack, rate-limit hits simply skip notification with no error. If they connect later, notifications start working without a redeploy.
 
 ---
+
+## API Reference
+
+All routes except login and callbacks need the session cookie.
+
+| Method | Route | Purpose |
+| :--- | :--- | :--- |
+| GET | `/api/auth/google` | Start Google login |
+| GET | `/api/auth/google/callback` | Google redirect target, sets the session cookie |
+| POST | `/api/auth/demo` | Demo login |
+| GET | `/api/auth/me` | Current user, senders and Slack status |
+| POST | `/api/auth/logout` | Clear the session |
+| POST | `/api/emails/schedule` | Schedule emails (recipients, subject, body, scheduledAt, optional senderId, maxEmailsPerHour, minDelayMsBetweenSend) |
+| GET | `/api/emails/scheduled` | Paginated scheduled emails |
+| GET | `/api/emails/sent` | Paginated sent and failed emails |
+| GET | `/api/emails/search` | Search emails (Elasticsearch) |
+| GET | `/api/emails/senders` | List senders |
+| POST | `/api/emails/senders` | Create a sender |
+| GET | `/api/slack/connect` | Start Slack OAuth |
+| GET | `/api/slack/status` | Slack connection status |
+| POST | `/api/slack/disconnect` | Disconnect Slack |
 
 ## Features Implemented
 
